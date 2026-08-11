@@ -1,0 +1,29 @@
+# Python / Environment
+.venv/
+venv/
+env/
+.env
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Linting
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDEs & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Explicitly ensure required project artifacts are tracked
+!models/final_model.pth
+!snapshots/epoch_1_weights.pt
+!snapshots/final_epoch_weights.pt
+!logs/training_metrics.csv
+!verification/attention_output.json
+!verification/encodings_output.json
+!reports/attention_head_biography.md
