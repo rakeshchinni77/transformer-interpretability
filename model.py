@@ -1,6 +1,8 @@
 import math
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from config.settings import settings
 
 
 def scaled_dot_product_attention(query, key, value, mask=None):
@@ -36,3 +38,86 @@ def scaled_dot_product_attention(query, key, value, mask=None):
     output = torch.matmul(attention_weights, value)
 
     return output, attention_weights
+
+
+class MultiHeadAttention(nn.Module):
+    """
+    Multi-Head Attention module implemented from scratch.
+
+    Splits embedding dimension (d_model) into `h` parallel heads of dimension `d_k = d_model // h`,
+    applies linear projections W_q, W_k, W_v, computes scaled dot-product attention per head,
+    concatenates head outputs, and applies output linear projection W_o.
+    """
+
+    def __init__(
+        self,
+        d_model: int = settings.d_model,
+        h: int = settings.num_heads,
+        dropout: float = settings.dropout,
+    ):
+        super().__init__()
+        if d_model <= 0:
+            raise ValueError(f"d_model must be > 0, got {d_model}")
+        if h <= 0:
+            raise ValueError(f"num_heads must be > 0, got {h}")
+        if d_model % h != 0:
+            raise ValueError(f"d_model ({d_model}) must be divisible by num_heads ({h}).")
+
+        self.d_model = d_model
+        self.h = h
+        self.d_k = d_model // h
+
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(dropout) if dropout > 0.0 else None
+
+    def forward(self, query, key, value, mask=None):
+        """
+        Forward pass for Multi-Head Attention.
+
+        Args:
+            query (torch.Tensor): Query tensor of shape (batch, query_seq_len, d_model)
+            key (torch.Tensor): Key tensor of shape (batch, key_seq_len, d_model)
+            value (torch.Tensor): Value tensor of shape (batch, key_seq_len, d_model)
+            mask (torch.Tensor, optional): Attention mask tensor (1=allowed, 0=masked).
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]:
+                - output tensor of shape (batch, query_seq_len, d_model)
+                - attention weights tensor of shape (batch, h, query_seq_len, key_seq_len)
+        """
+        if query.size(-1) != self.d_model or key.size(-1) != self.d_model or value.size(-1) != self.d_model:
+            raise ValueError(
+                f"Feature dimension of query ({query.size(-1)}), key ({key.size(-1)}), "
+                f"and value ({value.size(-1)}) must match d_model ({self.d_model})."
+            )
+
+        batch_size = query.size(0)
+
+        # 1) Linear projections: (batch, seq_len, d_model)
+        Q = self.W_q(query)
+        K = self.W_k(key)
+        V = self.W_v(value)
+
+        # 2) Split heads: (batch, seq_len, h, d_k) -> transpose to (batch, h, seq_len, d_k)
+        Q = Q.view(batch_size, -1, self.h, self.d_k).transpose(1, 2)
+        K = K.view(batch_size, -1, self.h, self.d_k).transpose(1, 2)
+        V = V.view(batch_size, -1, self.h, self.d_k).transpose(1, 2)
+
+        # 3) Apply scaled dot-product attention
+        x, p_attn = scaled_dot_product_attention(Q, K, V, mask=mask)
+
+        # Apply dropout if configured and in training mode
+        if self.dropout is not None:
+            x = self.dropout(x)
+
+        # 4) Concatenate heads: (batch, h, query_seq_len, d_k) -> (batch, query_seq_len, h, d_k) -> (batch, query_seq_len, d_model)
+        x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+
+        # 5) Output projection: (batch, query_seq_len, d_model)
+        output = self.W_o(x)
+
+        return output, p_attn
