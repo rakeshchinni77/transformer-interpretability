@@ -121,3 +121,73 @@ class MultiHeadAttention(nn.Module):
         output = self.W_o(x)
 
         return output, p_attn
+
+
+class PositionalEncoding(nn.Module):
+    """
+    Positional Encoding module supporting both Sinusoidal (deterministic) and Learned strategies.
+
+    Args:
+        d_model (int): Model embedding dimension (default from settings.d_model).
+        max_len (int): Maximum supported sequence length (default from settings.max_len).
+        method (str): Strategy name, either 'sinusoidal' or 'learned' (default 'sinusoidal').
+    """
+
+    def __init__(
+        self,
+        d_model: int = settings.d_model,
+        max_len: int = settings.max_len,
+        method: str = "sinusoidal",
+    ):
+        super().__init__()
+        if d_model <= 0:
+            raise ValueError(f"d_model must be > 0, got {d_model}")
+        if max_len <= 0:
+            raise ValueError(f"max_len must be > 0, got {max_len}")
+
+        method_clean = method.lower().strip()
+        if method_clean not in ("sinusoidal", "learned"):
+            raise ValueError(f"Unsupported positional encoding method '{method}'. Supported methods: 'sinusoidal', 'learned'.")
+
+        self.d_model = d_model
+        self.max_len = max_len
+        self.method = method_clean
+
+        if self.method == "sinusoidal":
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, d_model, 2, dtype=torch.float) * (-math.log(10000.0) / d_model)
+            )
+
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+
+            # Register as buffer so it moves with the module and appears in state_dict without gradient updates
+            self.register_buffer("pe", pe)
+        else:
+            # Learned strategy uses trainable embedding lookup
+            self.position_embedding = nn.Embedding(max_len, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass injecting positional encodings into input token embeddings.
+
+        Args:
+            x (torch.Tensor): Tensor of shape (batch, seq_len, d_model).
+
+        Returns:
+            torch.Tensor: Positionally encoded tensor of shape (batch, seq_len, d_model).
+        """
+        if x.dim() < 2 or x.size(-1) != self.d_model:
+            raise ValueError(f"Input feature dimension ({x.size(-1)}) must match d_model ({self.d_model}).")
+
+        seq_len = x.size(1)
+        if seq_len > self.max_len:
+            raise ValueError(f"Sequence length ({seq_len}) exceeds maximum allowed length ({self.max_len}).")
+
+        if self.method == "sinusoidal":
+            return x + self.pe[:seq_len]
+        else:
+            positions = torch.arange(seq_len, device=x.device)
+            return x + self.position_embedding(positions)
