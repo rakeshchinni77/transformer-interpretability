@@ -4,11 +4,34 @@
 This project focuses on building a Transformer Encoder from scratch using PyTorch (without high-level abstractions like `torch.nn.MultiheadAttention`) to explore the internal mechanics of self-attention, multi-head attention, and positional encodings. An interactive interpretability dashboard built with Streamlit will allow visual inspection of attention weights and head entropy metrics.
 
 ## 2. Project Status
-Current Status: **Phase 1 — Repository initialization**
+Current Status: **Phase 2 — Environment & Dependency Verification Complete**
 
-Project foundation and file structure have been initialized. Implementation of mathematical modules, model architecture, training pipeline, and Streamlit dashboard will be added incrementally through later phases.
+Local development environment `.venv` with Python 3.10.11 and PyTorch with CUDA 12.1 acceleration has been set up and verified.
 
-## 3. Planned Technology Stack
+## 3. Environment & Dependency Setup
+- **Python Version**: `3.10.11`
+- **Virtual Environment Creation**:
+  ```powershell
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  ```
+- **Dependencies Installation**:
+  ```powershell
+  pip install -r requirements.txt
+  ```
+- **PyTorch Verification Command**:
+  ```powershell
+  python -c "import torch; print(torch.__version__); print('Autograd test:', torch.tensor([2.0], requires_grad=True).pow(2).backward() is None)"
+  ```
+- **CUDA Verification Command**:
+  ```powershell
+  python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+  ```
+  *Tested GPU Configuration*: NVIDIA GeForce RTX 2050 (CUDA 12.1 runtime).
+  *CPU Fallback*: If CUDA is unavailable, PyTorch automatically defaults to CPU computations.
+
+
+## 4. Planned Technology Stack
 - **Core Language & ML**: Python 3.10+, PyTorch, NumPy
 - **Dataset & Tokenization**: Hugging Face `datasets` (Stanford IMDB), Hugging Face `transformers` (BERT Tokenizer only)
 - **Data Analysis & Visualization**: Pandas, Matplotlib, Seaborn
