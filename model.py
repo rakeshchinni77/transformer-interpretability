@@ -191,3 +191,180 @@ class PositionalEncoding(nn.Module):
         else:
             positions = torch.arange(seq_len, device=x.device)
             return x + self.position_embedding(positions)
+
+
+class EncoderLayer(nn.Module):
+    """
+    Single Pre-LN Transformer Encoder Layer implemented from scratch.
+
+    Contains:
+    - LayerNorm before multi-head attention
+    - Multi-head self-attention
+    - Residual connection & Dropout
+    - LayerNorm before feed-forward network
+    - Position-wise Feed-Forward Network (Linear -> ReLU -> Linear)
+    - Residual connection & Dropout
+    """
+
+    def __init__(
+        self,
+        d_model: int = settings.d_model,
+        num_heads: int = settings.num_heads,
+        d_ff: int = settings.d_ff,
+        dropout: float = settings.dropout,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.self_attn = MultiHeadAttention(d_model=d_model, h=num_heads, dropout=dropout)
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.norm2 = nn.LayerNorm(d_model)
+        self.feed_forward = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU(),
+            nn.Linear(d_ff, d_model),
+        )
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
+        """
+        Forward pass for EncoderLayer using Pre-LN architecture.
+
+        Args:
+            x (torch.Tensor): Input hidden states of shape (batch, seq_len, d_model).
+            mask (torch.Tensor, optional): Attention mask.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]:
+                - output hidden states of shape (batch, seq_len, d_model)
+                - attention weights of shape (batch, num_heads, seq_len, seq_len)
+        """
+        # Sublayer 1: Pre-LN Multi-Head Self-Attention + Residual
+        norm_x1 = self.norm1(x)
+        attn_out, layer_attn = self.self_attn(norm_x1, norm_x1, norm_x1, mask=mask)
+        x = x + self.dropout1(attn_out)
+
+        # Sublayer 2: Pre-LN Feed-Forward + Residual
+        norm_x2 = self.norm2(x)
+        ff_out = self.feed_forward(norm_x2)
+        x = x + self.dropout2(ff_out)
+
+        return x, layer_attn
+
+
+class TransformerEncoder(nn.Module):
+    """
+    Stacked Transformer Encoder layers built from scratch.
+
+    Maintains a ModuleList of EncoderLayer modules and collects attention weights
+    from every layer during forward execution.
+    """
+
+    def __init__(
+        self,
+        d_model: int = settings.d_model,
+        num_heads: int = settings.num_heads,
+        num_layers: int = settings.num_layers,
+        d_ff: int = settings.d_ff,
+        dropout: float = settings.dropout,
+    ):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            EncoderLayer(d_model=d_model, num_heads=num_heads, d_ff=d_ff, dropout=dropout)
+            for _ in range(num_layers)
+        ])
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None):
+        """
+        Forward pass iterating through all encoder layers.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, seq_len, d_model).
+            mask (torch.Tensor, optional): Attention mask tensor.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor]]:
+                - final hidden states of shape (batch, seq_len, d_model)
+                - list of attention weight tensors from every encoder layer
+        """
+        attentions = []
+        for layer in self.layers:
+            x, layer_attn = layer(x, mask=mask)
+            attentions.append(layer_attn)
+        return x, attentions
+
+
+class TransformerClassifier(nn.Module):
+    """
+    Full Transformer Text Classifier combining:
+    - Token Embedding
+    - Positional Encoding
+    - Custom Stacked Transformer Encoder
+    - First-token CLS pooling & Linear Classification Head
+    """
+
+    def __init__(
+        self,
+        vocab_size: int = 30522,
+        d_model: int = settings.d_model,
+        num_heads: int = settings.num_heads,
+        num_layers: int = settings.num_layers,
+        d_ff: int = settings.d_ff,
+        dropout: float = settings.dropout,
+        num_classes: int = settings.num_classes,
+        max_len: int = settings.max_len,
+        positional_encoding: str = "sinusoidal",
+    ):
+        super().__init__()
+        if vocab_size <= 0:
+            raise ValueError(f"vocab_size must be > 0, got {vocab_size}")
+
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(
+            d_model=d_model, max_len=max_len, method=positional_encoding
+        )
+        self.encoder = TransformerEncoder(
+            d_model=d_model,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            d_ff=d_ff,
+            dropout=dropout,
+        )
+        self.classifier = nn.Linear(d_model, num_classes)
+
+    def forward(self, input_ids: torch.Tensor, mask: torch.Tensor = None):
+        """
+        Forward pass for complete classification model.
+
+        Args:
+            input_ids (torch.Tensor): Integer token IDs of shape (batch, seq_len).
+            mask (torch.Tensor, optional): Attention mask tensor.
+
+        Returns:
+            tuple[torch.Tensor, list[torch.Tensor]]:
+                - raw classification logits of shape (batch, num_classes)
+                - list of attention weight tensors from all encoder layers
+        """
+        if input_ids.dim() != 2:
+            raise ValueError(f"input_ids must be a 2D tensor (batch, seq_len), got shape {input_ids.shape}")
+
+        seq_len = input_ids.size(1)
+        if seq_len > self.positional_encoding.max_len:
+            raise ValueError(
+                f"Sequence length ({seq_len}) exceeds max_len ({self.positional_encoding.max_len})"
+            )
+
+        # 1) Token Embedding + Positional Encoding: (batch, seq_len, d_model)
+        x = self.token_embedding(input_ids)
+        x = self.positional_encoding(x)
+
+        # 2) Custom Transformer Encoder: (batch, seq_len, d_model), attentions
+        hidden_states, attentions = self.encoder(x, mask=mask)
+
+        # 3) CLS Token Representation (first sequence position): (batch, d_model)
+        cls_rep = hidden_states[:, 0, :]
+
+        # 4) Linear Classifier: (batch, num_classes)
+        logits = self.classifier(cls_rep)
+
+        return logits, attentions
