@@ -332,13 +332,19 @@ class TransformerClassifier(nn.Module):
         )
         self.classifier = nn.Linear(d_model, num_classes)
 
-    def forward(self, input_ids: torch.Tensor, mask: torch.Tensor = None):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        mask: torch.Tensor = None,
+        attention_mask: torch.Tensor = None,
+    ):
         """
         Forward pass for complete classification model.
 
         Args:
             input_ids (torch.Tensor): Integer token IDs of shape (batch, seq_len).
             mask (torch.Tensor, optional): Attention mask tensor.
+            attention_mask (torch.Tensor, optional): Alias for mask parameter.
 
         Returns:
             tuple[torch.Tensor, list[torch.Tensor]]:
@@ -353,6 +359,14 @@ class TransformerClassifier(nn.Module):
             raise ValueError(
                 f"Sequence length ({seq_len}) exceeds max_len ({self.positional_encoding.max_len})"
             )
+
+        # Support attention_mask keyword argument alias
+        if mask is None and attention_mask is not None:
+            mask = attention_mask
+
+        # Convert 2D mask (batch, seq_len) to 4D broadcastable shape (batch, 1, 1, seq_len)
+        if mask is not None and mask.dim() == 2:
+            mask = mask[:, None, None, :]
 
         # 1) Token Embedding + Positional Encoding: (batch, seq_len, d_model)
         x = self.token_embedding(input_ids)
