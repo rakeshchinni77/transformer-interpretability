@@ -139,3 +139,14 @@ def test_smoke_training_execution():
     """Test running run_training(smoke=True) execution end-to-end."""
     ckpt_path = run_training(smoke=True)
     assert ckpt_path.exists()
+    for smoke_file in [
+        ckpt_path,
+        Path("logs/smoke_training_metrics.csv"),
+        Path("snapshots/smoke_epoch_1_weights.pt"),
+        Path("snapshots/smoke_final_epoch_weights.pt"),
+    ]:
+        try:
+            if smoke_file.exists():
+                smoke_file.unlink()
+        except PermissionError:
+            pass

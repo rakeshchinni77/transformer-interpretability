@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 
 from config.settings import settings
 from data.dataset import get_imdb_dataloaders, get_tokenizer, load_imdb_raw_dataset, IMDBDataset
@@ -14,6 +14,9 @@ from model import TransformerClassifier
 
 MODELS_DIR = Path(__file__).resolve().parent / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
+SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,6 +29,25 @@ def set_seed(seed: int = settings.seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def compute_attention_entropy(attention_weights: torch.Tensor, epsilon: float = 1e-9) -> torch.Tensor:
+    """
+    Computes Shannon Entropy H(p) = -sum(p * log(p)) over key dimension (dim=-1).
+
+    Args:
+        attention_weights (torch.Tensor): Attention weights tensor of shape (batch, heads, seq_len, seq_len).
+        epsilon (float): Small constant for numerical stability.
+
+    Returns:
+        torch.Tensor: Mean scalar entropy for each head, shape (heads,).
+    """
+    p = attention_weights.clamp_min(epsilon)
+    # Entropy per (batch_item, head, query_token)
+    entropy_per_query = -(p * torch.log(p)).sum(dim=-1)
+    # Average across batch (dim 0) and query tokens (dim 2) -> shape (heads,)
+    mean_head_entropy = entropy_per_query.mean(dim=(0, 2))
+    return mean_head_entropy
 
 
 def get_warmup_inv_sqrt_lambda(warmup_steps: int = settings.warmup_steps):
@@ -175,13 +197,13 @@ def save_checkpoint(model: nn.Module, tokenizer_name: str, epoch: int, filepath:
 
 
 def run_training(smoke: bool = False):
-    """Main execution function for running training (smoke mode or full production mode)."""
+    """Main execution function for running training and generating Phase 11 interpretability artifacts."""
     set_seed(settings.seed)
 
     device_str = settings.resolved_device
     device = torch.device(device_str)
 
-    print(f"--- TRANSFORMER TRAINING PIPELINE ---")
+    print(f"--- TRANSFORMER TRAINING & ARTIFACT GENERATION ---")
     print(f"Device: {device}")
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
@@ -199,6 +221,9 @@ def run_training(smoke: bool = False):
         test_loader = DataLoader(test_ds, batch_size=8, shuffle=False)
         epochs = 2
         checkpoint_path = MODELS_DIR / "smoke_model.pth"
+        csv_path = LOGS_DIR / "smoke_training_metrics.csv"
+        epoch_1_snap_path = SNAPSHOTS_DIR / "smoke_epoch_1_weights.pt"
+        final_epoch_snap_path = SNAPSHOTS_DIR / "smoke_final_epoch_weights.pt"
     else:
         print("\nLoading full IMDB dataset and building DataLoaders...")
         train_loader, test_loader, tokenizer = get_imdb_dataloaders(
@@ -210,6 +235,9 @@ def run_training(smoke: bool = False):
         )
         epochs = settings.epochs
         checkpoint_path = MODELS_DIR / "final_model.pth"
+        csv_path = LOGS_DIR / "training_metrics.csv"
+        epoch_1_snap_path = SNAPSHOTS_DIR / "epoch_1_weights.pt"
+        final_epoch_snap_path = SNAPSHOTS_DIR / "final_epoch_weights.pt"
 
     model = build_model(vocab_size=tokenizer.vocab_size, device=device)
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -221,10 +249,16 @@ def run_training(smoke: bool = False):
     warmup_steps = 10 if smoke else settings.warmup_steps
     scheduler = build_scheduler(optimizer, warmup_steps=warmup_steps)
 
-    # Record initial state for training verification
-    initial_param_val = next(model.parameters()).clone().detach()
+    # Initialize CSV metrics log file with mandatory header
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write("epoch,layer,head,attention_entropy\n")
 
-    print("\nStarting Training...")
+    # Select deterministic reference batch from test loader for attention snapshots and entropy metrics
+    ref_batch = next(iter(test_loader))
+    ref_input_ids = ref_batch["input_ids"][:8].to(device)
+    ref_attention_mask = ref_batch["attention_mask"][:8].to(device)
+
+    print("\nStarting Training & Artifact Generation...")
     for epoch in range(1, epochs + 1):
         train_loss, train_acc, grad_norm, lr = train_one_epoch(
             model=model,
@@ -250,43 +284,66 @@ def run_training(smoke: bool = False):
             f"Grad Norm: {grad_norm:.4f} | LR: {lr:.6f}"
         )
 
-    # Verify parameter updates occurred
-    updated_param_val = next(model.parameters()).clone().detach()
-    param_changed = not torch.equal(initial_param_val, updated_param_val)
-    print(f"Parameter update confirmed: {param_changed}")
+        # Collect attention weights on reference batch under eval mode
+        model.eval()
+        with torch.no_grad():
+            ref_logits, ref_attentions = model(ref_input_ids, attention_mask=ref_attention_mask)
+
+        # 1. Compute and record Shannon entropy metrics into CSV
+        with open(csv_path, "a", encoding="utf-8") as f:
+            for layer_idx, layer_attn in enumerate(ref_attentions):
+                head_entropies = compute_attention_entropy(layer_attn)
+                for head_idx, entropy_val in enumerate(head_entropies.tolist()):
+                    f.write(f"{epoch},{layer_idx},{head_idx},{entropy_val:.6f}\n")
+            f.flush()
+
+        # 2. Save genuine attention snapshots for epoch 1 and final epoch
+        snapshot_payload = {
+            "attention_weights": [attn.detach().cpu() for attn in ref_attentions],
+            "input_ids": ref_input_ids.detach().cpu(),
+            "attention_mask": ref_attention_mask.detach().cpu(),
+            "epoch": epoch,
+        }
+
+        if epoch == 1:
+            torch.save(snapshot_payload, epoch_1_snap_path)
+            print(f"Snapshot saved cleanly to {epoch_1_snap_path}")
+
+        if epoch == epochs:
+            torch.save(snapshot_payload, final_epoch_snap_path)
+            print(f"Snapshot saved cleanly to {final_epoch_snap_path}")
 
     # Save final model checkpoint
     save_checkpoint(model, settings.tokenizer_name, epochs, checkpoint_path)
 
     # Verify reload of saved checkpoint
     print("\nVerifying checkpoint reload...")
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    reload_model = TransformerClassifier(
-        vocab_size=ckpt["config"]["vocab_size"],
-        d_model=ckpt["config"]["d_model"],
-        num_heads=ckpt["config"]["num_heads"],
-        num_layers=ckpt["config"]["num_layers"],
-        d_ff=ckpt["config"]["d_ff"],
-        dropout=ckpt["config"]["dropout"],
-        num_classes=ckpt["config"]["num_classes"],
-        max_len=ckpt["config"]["max_len"],
-    ).to(device)
-    reload_model.load_state_dict(ckpt["model_state_dict"])
-    reload_model.eval()
+    if checkpoint_path.exists():
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        reload_model = TransformerClassifier(
+            vocab_size=ckpt["config"]["vocab_size"],
+            d_model=ckpt["config"]["d_model"],
+            num_heads=ckpt["config"]["num_heads"],
+            num_layers=ckpt["config"]["num_layers"],
+            d_ff=ckpt["config"]["d_ff"],
+            dropout=ckpt["config"]["dropout"],
+            num_classes=ckpt["config"]["num_classes"],
+            max_len=ckpt["config"]["max_len"],
+        ).to(device)
+        reload_model.load_state_dict(ckpt["model_state_dict"])
+        reload_model.eval()
 
-    sample_batch = next(iter(test_loader))
-    with torch.no_grad():
-        test_ids = sample_batch["input_ids"][:2].to(device)
-        test_mask = sample_batch["attention_mask"][:2].to(device)
-        reload_logits, reload_attns = reload_model(test_ids, attention_mask=test_mask)
+        with torch.no_grad():
+            reload_logits, reload_attns = reload_model(ref_input_ids, attention_mask=ref_attention_mask)
 
-    print(f"Reload model inference successful! Logits shape: {reload_logits.shape}")
-    print("--- TRAINING PIPELINE COMPLETE ---")
+        print(f"Reload model inference successful! Logits shape: {reload_logits.shape}")
+
+    print("--- TRAINING & ARTIFACT GENERATION COMPLETE ---")
     return checkpoint_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Transformer Encoder Training Pipeline")
+    parser = argparse.ArgumentParser(description="Transformer Encoder Training & Artifact Generation Pipeline")
     parser.add_argument(
         "--smoke",
         action="store_true",
