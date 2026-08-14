@@ -1,8 +1,12 @@
 .venv/
 venv/
+env/
+.env
 __pycache__/
 .pytest_cache/
 .git/
-.gitignore
-.env
+.github/
+.vscode/
 *.pyc
+*.pyo
+*.log

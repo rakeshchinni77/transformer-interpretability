@@ -4,9 +4,9 @@
 This project focuses on building a Transformer Encoder from scratch using PyTorch (without high-level abstractions like `torch.nn.MultiheadAttention`) to explore the internal mechanics of self-attention, multi-head attention, and positional encodings. An interactive interpretability dashboard built with Streamlit will allow visual inspection of attention weights and head entropy metrics.
 
 ## 2. Project Status
-Current Status: **Phase 2 — Environment & Dependency Verification Complete**
+Current Status: **Phase 9 — Real IMDB Dataset & Tokenization Complete**
 
-Local development environment `.venv` with Python 3.10.11 and PyTorch with CUDA 12.1 acceleration has been set up and verified.
+Data pipeline integrating Stanford IMDB dataset (`stanfordnlp/imdb`) and BERT Tokenizer (`google-bert/bert-base-uncased`) with custom `TransformerClassifier` model forward pass integration has been fully implemented and verified.
 
 ## 3. Environment & Dependency Setup
 - **Python Version**: `3.10.11`
