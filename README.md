@@ -34,25 +34,27 @@ The following Mermaid diagram outlines the end-to-end data flow from user review
 
 ```mermaid
 flowchart TD
-    A[IMDB Movie Review / User Sentence] --> B[BERT Tokenizer google-bert/bert-base-uncased]
-    B --> C[input_ids & attention_mask]
-    C --> D[Token Embedding d_model=128]
-    C --> E[Positional Encoding Sinusoidal / Learned]
-    D + E --> F[Transformer Encoder Layer 0]
-    F --> G[Transformer Encoder Layer 1]
+    A["IMDB Review / Input Sentence"] --> B["BERT Tokenizer (google-bert/bert-base-uncased)"]
+    B --> C["input_ids & attention_mask"]
+    C --> D["Token Embedding (d_model=128)"]
+    C --> E["Positional Encoding (Sinusoidal / Learned)"]
+    D --> F["Sum Embedding & Positional Encoding"]
+    E --> F
+    F --> G["Transformer Encoder Layer 0"]
+    G --> H["Transformer Encoder Layer 1"]
     
-    F -. Extract Layer 0 Attentions .-> H[Attention Interpretability Engine]
-    G -. Extract Layer 1 Attentions .-> H
+    G -. Extract Layer 0 Attentions .-> I["Attention Interpretability Engine"]
+    H -. Extract Layer 1 Attentions .-> I
     
-    G --> I[CLS Token Representation]
-    I --> J[Linear Classifier d_model -> 2]
-    J --> K[Logits & Softmax Probabilities]
+    H --> J["CLS Token Representation"]
+    J --> K["Linear Classifier (d_model -> 2)"]
+    K --> L["Logits & Softmax Probabilities"]
     
-    K --> L[Streamlit Dashboard / UI]
-    H --> L
-    L --> M[Sentiment Prediction & Confidence]
-    L --> N[Token-by-Token Attention Heatmap]
-    L --> O[Attention Entropy Dashboard]
+    L --> M["Streamlit Dashboard / UI"]
+    I --> M
+    M --> N["Sentiment Prediction & Confidence"]
+    M --> O["Token-by-Token Attention Heatmap"]
+    M --> P["Attention Entropy Dashboard"]
 ```
 
 ---
@@ -160,7 +162,7 @@ The complete training pipeline is implemented in [`train.py`](file:///c:/Users/b
 ### Learning Rate Schedule
 Custom `LambdaLR` scheduler implementing exact continuous linear warmup followed by inverse square-root decay:
 
-$$\text{lr\_factor}(\text{step}) = \begin{cases} \frac{\text{step}}{\text{warmup\_steps}} & \text{if } \text{step} \le \text{warmup\_steps} \\ \sqrt{\frac{\text{warmup\_steps}}{\text{step}}} & \text{if } \text{step} > \text{warmup\_steps} \end{cases}$$
+$$\text{lr-factor}(\text{step}) = \begin{cases} \frac{\text{step}}{\text{warmup-steps}} & \text{if } \text{step} \le \text{warmup-steps} \\ \sqrt{\frac{\text{warmup-steps}}{\text{step}}} & \text{if } \text{step} > \text{warmup-steps} \end{cases}$$
 
 ### Full Training Run Results (3 Epochs)
 - **Device**: CUDA (`NVIDIA GeForce RTX 2050`)
